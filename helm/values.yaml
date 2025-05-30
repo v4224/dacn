@@ -1,0 +1,93 @@
+namespace: app
+
+ingress:
+  enabled: true
+  host: api.mydomain.com
+  #tlsSecret: tls-secret
+
+api-gateway:
+  image:
+    repository: myregistry/api-gateway
+    tag: latest
+  replicaCount: 3
+  resources:
+    requests:
+      cpu: "200m"
+      memory: "256Mi"
+    limits:
+      cpu: "500m"
+      memory: "512Mi"
+  jwt:
+    signerKey: "<base64_signerKey>"
+    validDuration: "<base64_3600>"
+    refreshableDuration: "<base64_36000>"
+
+identity:
+  image:
+    repository: myregistry/identity-service
+    tag: latest
+  replicaCount: 2
+  resources:
+    requests:
+      cpu: "200m"
+      memory: "256Mi"
+    limits:
+      cpu: "500m"
+      memory: "512Mi"
+  db:
+    url: jdbc:mysql://mysql.app.svc.cluster.local:3306/identity_service
+    username: root
+    password: root
+  kafka:
+    bootstrapServers: kafka-service.app.svc.cluster.local:9094
+
+profile:
+  image:
+    repository: myregistry/profile-service
+    tag: latest
+  replicaCount: 2
+  resources:
+    requests:
+      cpu: "200m"
+      memory: "256Mi"
+    limits:
+      cpu: "500m"
+      memory: "512Mi"
+  neo4j:
+    uri: bolt://neo4j.app.svc.cluster.local:7687
+    username: neo4j
+    password: 12345678
+
+notification:
+  image:
+    repository: myregistry/notification-service
+    tag: latest
+  replicaCount: 2
+  resources:
+    requests:
+      cpu: "200m"
+      memory: "256Mi"
+    limits:
+      cpu: "500m"
+      memory: "512Mi"
+  mongodb:
+    uri: mongodb://root:root@mongo-notification.app.svc.cluster.local:27017/notification-service?authSource=admin
+  kafka:
+    bootstrapServers: kafka-service.app.svc.cluster.local:9094
+  brevoApiKey: "<base64_encoded_apikey>"
+
+post:
+  image:
+    repository: myregistry/post-service
+    tag: latest
+  replicaCount: 2
+  resources:
+    requests:
+      cpu: "200m"
+      memory: "256Mi"
+    limits:
+      cpu: "500m"
+      memory: "512Mi"
+  mongodb:
+    uri: mongodb://root:root@mongo-post.app.svc.cluster.local:27017/post-service?authSource=admin
+  profileUrl: http://profile-service.app.svc.cluster.local:8081/profile

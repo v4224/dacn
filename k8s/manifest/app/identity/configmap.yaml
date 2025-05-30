@@ -1,0 +1,41 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: identity-config
+  namespace: app
+data:
+  application.yml: |
+    server:
+      port: 8080
+      servlet:
+        context-path: /identity
+
+    spring:
+      application:
+        name: identity-service
+
+      datasource:
+        url: ${DBMS_CONNECTION}
+        driverClassName: "com.mysql.cj.jdbc.Driver"
+        username: ${DBMS_USERNAME}
+        password: ${DBMS_PASSWORD}
+
+      jpa:
+        hibernate:
+          ddl-auto: update
+        show-sql: true
+
+      kafka:
+        bootstrap-servers: messaging-cluster-kafka-bootstrap.infra.svc.cluster.local:9092
+        producer:
+          key-serializer: org.apache.kafka.common.serialization.StringSerializer
+          value-serializer: org.springframework.kafka.support.serializer.JsonSerializer
+
+    jwt:
+      signerKey: ${JWT_SIGNERKEY}
+      valid-duration: ${JWT_VALID_DURATION}
+      refreshable-duration: ${JWT_REFRESHABLE_DURATION}
+
+    app:
+      services:
+        profile: http://profile-service.app.svc.cluster.local:8081/profile

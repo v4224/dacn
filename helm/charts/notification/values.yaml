@@ -1,0 +1,10 @@
+image:
+  repository: {{ .Values.notification.image.repository }}
+  tag: {{ .Values.notification.image.tag }}
+replicaCount: {{ .Values.notification.replicaCount }}
+resources: {{ toYaml .Values.notification.resources | nindent 2 }}
+mongodb:
+  uri: {{ .Values.notification.mongodb.uri }}
+kafka:
+  bootstrapServers: {{ .Values.notification.kafka.bootstrapServers }}
+brevoApiKey: {{ .Values.notification.brevoApiKey }}

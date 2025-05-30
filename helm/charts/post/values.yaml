@@ -1,0 +1,8 @@
+image:
+  repository: {{ .Values.post.image.repository }}
+  tag: {{ .Values.post.image.tag }}
+replicaCount: {{ .Values.post.replicaCount }}
+resources: {{ toYaml .Values.post.resources | nindent 2 }}
+mongodb:
+  uri: {{ .Values.post.mongodb.uri }}
+profileUrl: {{ .Values.post.profileUrl }}

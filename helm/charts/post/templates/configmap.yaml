@@ -1,0 +1,21 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: post-config
+  namespace: {{ .Values.namespace }}
+data:
+  application.yml: |
+    server:
+      port: 8083
+      servlet:
+        context-path: /post
+    spring:
+      application:
+        name: post-service
+      data:
+        mongodb:
+          uri: {{ .Values.mongodb.uri }}
+    app:
+      services:
+        profile:
+          url: {{ .Values.profileUrl }}

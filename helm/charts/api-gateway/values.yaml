@@ -1,0 +1,9 @@
+image:
+  repository: {{ .Values.api-gateway.image.repository }}
+  tag: {{ .Values.api-gateway.image.tag }}
+replicaCount: {{ .Values.api-gateway.replicaCount }}
+resources: {{ toYaml .Values.api-gateway.resources | nindent 2 }}
+jwt:
+  signerKey: {{ .Values.api-gateway.jwt.signerKey }}
+  validDuration: {{ .Values.api-gateway.jwt.validDuration }}
+  refreshableDuration: {{ .Values.api-gateway.jwt.refreshableDuration }}

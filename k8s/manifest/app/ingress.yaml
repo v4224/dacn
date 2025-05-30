@@ -1,0 +1,23 @@
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: api-gateway-ingress
+  namespace: app
+  annotations:
+    nginx.ingress.kubernetes.io/rewrite-target: /$2
+spec:
+  rules:
+  - host: book-reviews.hoangvu42.site
+    http:
+      paths:
+      - path: /api/v1/(.*)
+        pathType: Prefix
+        backend:
+          service:
+            name: api-gateway
+            port:
+              number: 8888
+  # tls:
+  # - hosts:
+  #   - api.mydomain.com
+  #   secretName: tls-secret

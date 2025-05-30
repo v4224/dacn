@@ -1,0 +1,9 @@
+image:
+  repository: {{ .Values.profile.image.repository }}
+  tag: {{ .Values.profile.image.tag }}
+replicaCount: {{ .Values.profile.replicaCount }}
+resources: {{ toYaml .Values.profile.resources | nindent 2 }}
+neo4j:
+  uri: {{ .Values.profile.neo4j.uri }}
+  username: {{ .Values.profile.neo4j.username }}
+  password: {{ .Values.profile.neo4j.password }}

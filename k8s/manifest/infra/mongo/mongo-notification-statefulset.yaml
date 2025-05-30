@@ -1,0 +1,52 @@
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: mongo-notification
+  namespace: infra
+spec:
+  serviceName: mongo-notification
+  replicas: 1
+  selector:
+    matchLabels:
+      app: mongo-notification
+  template:
+    metadata:
+      labels:
+        app: mongo-notification
+    spec:
+      containers:
+      - name: mongod
+        image: mongo:6.0
+        args: ["--replSet", "rs0"]
+        env:
+        - name: MONGO_INITDB_ROOT_USERNAME
+          valueFrom:
+            secretKeyRef:
+              name: mongo-secret
+              key: username
+        - name: MONGO_INITDB_ROOT_PASSWORD
+          valueFrom:
+            secretKeyRef:
+              name: mongo-secret
+              key: password
+        ports:
+        - containerPort: 27017
+          name: mongo
+        volumeMounts:
+        - name: data
+          mountPath: /data/db
+        resources:
+          requests:
+            cpu: "200m"
+            memory: "512Mi"
+          limits:
+            cpu: "500m"
+            memory: "1Gi"
+  volumeClaimTemplates:
+  - metadata:
+      name: data
+    spec:
+      accessModes: [ "ReadWriteOnce" ]
+      resources:
+        requests:
+          storage: 10Gi

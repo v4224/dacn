@@ -1,0 +1,19 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: profile-config
+  namespace: {{ .Values.namespace }}
+data:
+  application.yml: |
+    server:
+      port: 8081
+      servlet:
+        context-path: /profile
+    spring:
+      application:
+        name: profile-service
+      neo4j:
+        uri: {{ .Values.neo4j.uri }}
+        authentication:
+          username: {{ .Values.neo4j.username }}
+          password: {{ .Values.neo4j.password }}

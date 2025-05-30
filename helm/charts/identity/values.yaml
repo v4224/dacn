@@ -1,0 +1,11 @@
+image:
+  repository: {{ .Values.identity.image.repository }}
+  tag: {{ .Values.identity.image.tag }}
+replicaCount: {{ .Values.identity.replicaCount }}
+resources: {{ toYaml .Values.identity.resources | nindent 2 }}
+db:
+  url: {{ .Values.identity.db.url }}
+  username: {{ .Values.identity.db.username }}
+  password: {{ .Values.identity.db.password }}
+kafka:
+  bootstrapServers: {{ .Values.identity.kafka.bootstrapServers }}
