@@ -1,29 +1,221 @@
 pipeline {
-  agent { label 'jenkins' }
-
-  environment {
-    REGISTRY_CRED   = credentials('docker-hub')
-    IMAGE_REGISTRY  = "hoangvu42"
-    SONARQUBE_ENV   = "sonarqube-server"
-    GITOPS_REPO_URL = "https://github.com/v4224/dacn-gitops.git"
-    ALL_SERVICES    = "api-gateway,identity-service,profile-service,notification-service,post-service,file-service"
-  }
-
-  options {
-    skipDefaultCheckout(true)
-    timestamps()
-  }
-
-  stages {
-    stage('Checkout Source') {
-      steps {
-        checkout scm
-        script {
-          env.BRANCH = env.BRANCH_NAME
-          env.IS_TAG = env.TAG_NAME != null
-          echo "Building for ${env.IS_TAG.toBoolean() ? 'tag' : 'branch'}: ${env.IS_TAG.toBoolean() ? env.TAG_NAME : env.BRANCH}"
-        }
-      }
+    agent any
+    options {
+        // Bỏ qua checkout mặc định để tự dùng lệnh checkout với credential 
+        skipDefaultCheckout(true)
     }
-  }
+    environment {
+        // Đặt tên registry Docker (Docker Hub user/orga)
+        DOCKER_REGISTRY = "hoangvu42"
+    }
+    stages {
+        stage('Checkout') {
+            steps {
+                // Checkout source từ GitHub dùng credential 'github-token'
+                checkout([
+                    $class: 'GitSCM',
+                    branches: [[name: "${env.BRANCH_NAME}"]],
+                    extensions: [[$class: 'LocalBranch']],  // checkout branch local
+                    userRemoteConfigs: [[
+                        url: "https://github.com/v4224/dacn.git",
+                        credentialsId: "github-token"
+                    ]]
+                ])
+            }
+        }
+        stage('Prepare Environment') {
+            steps {
+                script {
+                    // Xác định BRANCH và IS_TAG, thiết lập IMAGE_TAG tương ứng
+                    env.BRANCH = env.BRANCH_NAME ?: ''
+                    env.IS_TAG = (env.BRANCH ==~ /^v\\d+\\.\\d+\\.\\d+$/) ? "true" : "false"
+                    // Lấy commit SHA ngắn (7 ký tự) để gắn tag nếu cần
+                    def commitSha = sh(script: "git rev-parse --short=7 HEAD", returnStdout: true).trim()
+                    if (env.BRANCH == "develop") {
+                        env.IMAGE_TAG = "develop-${commitSha}"
+                    } else if (env.IS_TAG == "true") {
+                        env.IMAGE_TAG = "prod-${env.BRANCH}"
+                    } else {
+                        // Fallback cho nhánh khác (nếu có)
+                        env.IMAGE_TAG = "${env.BRANCH}-${commitSha}"
+                    }
+                    echo "Running on branch/tag: ${env.BRANCH}, IS_TAG=${env.IS_TAG}, IMAGE_TAG=${env.IMAGE_TAG}"
+                }
+            }
+        }
+        stage('Detect Changed Services') {
+            steps {
+                script {
+                    // Dò các service thay đổi bằng git diff
+                    def changedServices = []
+                    try {
+                        // So sánh HEAD với commit trước (HEAD~1)
+                        def diff = sh(script: "git diff --name-only HEAD~1 HEAD", returnStdout: true).trim()
+                        for (file in diff.split("\n")) {
+                            // Lấy tên service từ path (giả sử mỗi service có thư mục riêng ở root hoặc dưới thư mục 'services/')
+                            def svcName = file.split('/')[0]
+                            if (!changedServices.contains(svcName)) {
+                                changedServices.add(svcName)
+                            }
+                        }
+                    } catch (err) {
+                        echo "git diff failed or no previous commit, will build all services."
+                    }
+                    // Nếu không xác định được service thay đổi, fallback build tất cả (giả sử các thư mục dịch vụ nằm trực tiếp trong thư mục hiện tại hoặc dưới 'services/')
+                    if (changedServices.isEmpty()) {
+                        changedServices = sh(script: "ls -d */ 2>/dev/null || ls -d services/*/ 2>/dev/null", returnStdout: true)
+                                        .trim().replaceAll('/','').split()
+                        echo "Building all services: ${changedServices.join(', ')}"
+                    } else {
+                        echo "Changed services: ${changedServices.join(', ')}"
+                    }
+                    // Lưu danh sách service thay đổi vào biến môi trường để dùng ở các stage sau
+                    env.CHANGED_SERVICES = changedServices.join(' ')
+                }
+            }
+        }
+        // stage('SonarQube Scan') {
+        //     when {
+        //         expression { env.BRANCH == "develop" }  // Chỉ chạy SonarQube trên nhánh develop
+        //     }
+        //     steps {
+        //         script {
+        //             def services = env.CHANGED_SERVICES.split(' ')
+        //             // Kết nối SonarQube (giả sử đã cấu hình server SonarQube trong Jenkins với ID 'SonarServer')
+        //             withSonarQubeEnv('SonarServer') {
+        //                 for (svc in services) {
+        //                     echo "Running SonarQube scan for service: ${svc}"
+        //                     // Thực thi sonar-scanner cho từng service (giả sử mỗi service có cấu hình Sonar riêng)
+        //                     sh """
+        //                         sonar-scanner \\
+        //                           -Dsonar.projectKey=${svc} \\
+        //                           -Dsonar.projectName=${svc} \\
+        //                           -Dsonar.sources=${svc} \\
+        //                           -Dsonar.java.binaries=${svc}/target/classes \\
+        //                           -Dsonar.host.url=$SONAR_HOST_URL \\
+        //                           -Dsonar.login=$SONAR_AUTH_TOKEN
+        //                     """
+        //                 }
+        //             }
+        //         }
+        //     }
+        // }
+        stage('Build & Trivy Scan Images') {
+            steps {
+                script {
+                    def services = env.CHANGED_SERVICES.split(' ')
+                    for (svc in services) {
+                        // Xác định tên image đầy đủ cho service
+                        def imageName = "${env.DOCKER_REGISTRY}/${svc}:${env.IMAGE_TAG}"
+                        echo "Building Docker image for ${svc}: ${imageName}"
+                        sh "docker build -t ${imageName} ${svc}"
+                        echo "Scanning image ${imageName} with Trivy"
+                        // Quét lỗ hổng bảo mật bằng Trivy (HIGH, CRITICAL)
+                        sh """
+                            trivy image --exit-code 0 --severity HIGH,CRITICAL ${imageName} || true
+                        """
+                    }
+                }
+            }
+        }
+        stage('Push Docker Images') {
+            steps {
+                script {
+                    // Đăng nhập Docker Hub sử dụng credential 'docker-hub'
+                    withCredentials([usernamePassword(credentialsId: 'docker-hub', usernameVariable: 'DOCKER_USER', passwordVariable: 'DOCKER_PASS')]) {
+                        sh "echo \$DOCKER_PASS | docker login -u \$DOCKER_USER --password-stdin"
+                    }
+                    def services = env.CHANGED_SERVICES.split(' ')
+                    for (svc in services) {
+                        def imageName = "${env.DOCKER_REGISTRY}/${svc}:${env.IMAGE_TAG}"
+                        echo "Pushing image ${imageName}"
+                        sh "docker push ${imageName}"
+                    }
+                }
+            }
+        }
+        stage('Clone GitOps Repo') {
+            steps {
+                // Clone repository GitOps (chứa manifest môi trường) về thư mục 'gitops'
+                dir('gitops') {
+                    git url: 'https://github.com/v4224/dacn-gitops.git', credentialsId: 'github-token', branch: 'main'
+                }
+            }
+        }
+        stage('Update GitOps Config (Dev)') {
+            when {
+                branch 'develop'  // Chỉ chạy khi build nhánh develop
+            }
+            steps {
+                dir('gitops') {
+                    script {
+                        // Sửa các file trong thư mục dev/ với tag mới
+                        def services = env.CHANGED_SERVICES.split(' ')
+                        for (svc in services) {
+                            echo "Updating image tag for service ${svc} in dev config"
+                            sh """
+                                # Thay thế dòng image trong các file dưới dev/ chứa tên service
+                                sed -i "s#image: .*/${svc}:.*#image: ${env.DOCKER_REGISTRY}/${svc}:${env.IMAGE_TAG}#" dev/**/*.* || true
+                            """
+                        }
+                        // Commit và push thay đổi (nếu có) với user jenkins-ci
+                        def status = sh(script: "git status --porcelain", returnStdout: true).trim()
+                        if (status) {
+                            sh 'git config user.name "jenkins-ci"'
+                            sh 'git config user.email "jenkins-ci@example.com"'
+                            sh 'git commit -am "Update dev images to tag ${env.IMAGE_TAG}"'
+                            sh 'git push'
+                        } else {
+                            echo "No changes in dev config to commit."
+                        }
+                    }
+                }
+            }
+        }
+        stage('Update GitOps Config (Prod & Changelog)') {
+            when {
+                expression { env.IS_TAG == "true" }  // Chỉ chạy khi build tag (production)
+            }
+            steps {
+                dir('gitops') {
+                    script {
+                        // Sửa các file trong thư mục prod/ với tag mới
+                        def services = env.CHANGED_SERVICES.split(' ')
+                        for (svc in services) {
+                            echo "Updating image tag for service ${svc} in prod config"
+                            sh """
+                                sed -i "s#image: .*/${svc}:.*#image: ${env.DOCKER_REGISTRY}/${svc}:${env.IMAGE_TAG}#" prod/**/*.* || true
+                            """
+                        }
+                        // Tạo file changelog cho release tag
+                        def tagName = env.BRANCH  // Branch name in tag context is the tag
+                        sh """
+                            echo "# Release ${tagName}" > changelogs/release-${tagName}.md
+                            echo "" >> changelogs/release-${tagName}.md
+                            echo "Changelog for release ${tagName}." >> changelogs/release-${tagName}.md
+                        """
+                        sh "git add changelogs/release-${tagName}.md"
+                        // Commit và push thay đổi cho prod config và changelog
+                        def status = sh(script: "git status --porcelain", returnStdout: true).trim()
+                        if (status) {
+                            sh 'git config user.name "jenkins-ci"'
+                            sh 'git config user.email "jenkins-ci@example.com"'
+                            sh 'git commit -am "Release ${tagName}: update images and changelog"'
+                            sh 'git push'
+                        } else {
+                            echo "No changes in prod config to commit."
+                        }
+                    }
+                }
+            }
+        }
+    }
+    post {
+        success {
+            slackSend(channel: '#release', color: 'good', message: "✅ Pipeline succeeded for *${env.BRANCH}* (IMAGE_TAG=${env.IMAGE_TAG})")
+        }
+        failure {
+            slackSend(channel: '#release', color: 'danger', message: "❌ Pipeline failed for *${env.BRANCH}* (IMAGE_TAG=${env.IMAGE_TAG})")
+        }
+    }
 }
