@@ -19,9 +19,9 @@ pipeline {
       steps {
         checkout scm
         script {
-          BRANCH = env.BRANCH_NAME
-          IS_TAG = env.TAG_NAME != null
-          echo "Building for ${IS_TAG ? 'tag' : 'branch'}: ${IS_TAG ? env.TAG_NAME : BRANCH}"
+          env.BRANCH = env.BRANCH_NAME
+          env.IS_TAG = env.TAG_NAME != null
+          echo "Building for ${env.IS_TAG.toBoolean() ? 'tag' : 'branch'}: ${env.IS_TAG.toBoolean() ? env.TAG_NAME : env.BRANCH}"
         }
       }
     }
