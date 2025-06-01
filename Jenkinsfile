@@ -6,7 +6,7 @@ pipeline {
     IMAGE_REGISTRY   = "hoangvu42"
     SONARQUBE_ENV    = "sonarqube-server"
     GITOPS_REPO_URL  = "https://github.com/v4224/dacn-gitops.git"
-    ALL_SERVICES     = "api-gateway,identity-service,profile-service,notification-service,post-service,file-service"
+    ALL_SERVICES     = "api-gateway,identity-service,profile-service,notification-service,post-service"
   }
 
   options {
