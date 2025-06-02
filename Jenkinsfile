@@ -15,41 +15,37 @@ pipeline {
   }
 
   stages {
-    // ==========================
-    // 1. VALIDATE RUN CONTEXT
-    //    - Phải là:
-    //      * commit trên develop
-    //      * PR/MR (changeRequest) vào develop
-    //      * hoặc tag mới có pattern “v*” (giả định tạo từ deploy)
-    // ==========================
+    // -------------------------------------
+    // 1. CHECKPOINT: Chỉ cho phép chạy tiếp
+    //    nếu là commit trên develop hoặc tag (giả định tag tạo từ deploy)
+    // -------------------------------------
     stage('Validate Run Context') {
       when {
         anyOf {
           branch 'develop'
-          changeRequest()
-          tag pattern: "v.*", comparator: "REGEXP"
+          buildingTag()
         }
       }
       steps {
-        echo "✅ Pipeline được phép chạy: commit/PR trên develop hoặc tag mới từ deploy"
+        echo "✅ Điều kiện chạy hợp lệ: branch/develop hoặc đang build tag"
       }
     }
 
-    // ==========================
+    // -------------------------------------
     // 2. CHECKOUT SOURCE
-    //    - Chỉ chạy trên develop/PR hoặc tag
-    //    - Nếu GIT_BRANCH bắt đầu bằng "refs/tags/", gán TAG_NAME và BRANCH='deploy'
-    //    - Ngược lại, BRANCH=BRANCH_NAME
-    // ==========================
+    //    - Nếu buildingTag(), Jenkins sẽ set env.TAG_NAME = <tag>
+    //      và giả định tag được tạo từ branch deploy
+    //    - Nếu build trên develop, branch bình thường
+    // -------------------------------------
     stage('Checkout Source') {
       when {
         anyOf {
           branch 'develop'
-          changeRequest()
-          tag pattern: "v.*", comparator: "REGEXP"
+          buildingTag()
         }
       }
       steps {
+        // Dùng Multibranch Pipeline để checkout đúng nhánh hoặc tag
         checkout scm
 
         script {
@@ -57,101 +53,100 @@ pipeline {
           echo "GIT_BRANCH = ${rawBranch}"
 
           if (rawBranch?.startsWith("refs/tags/")) {
-            // Build tag
+            // Đang build tag
             env.TAG_NAME = rawBranch.replace("refs/tags/", "")
-            // Giả định tag chỉ tạo từ branch deploy
+            // Giả định tag chỉ được tạo từ nhánh deploy
             env.BRANCH = "deploy"
-            echo "→ Detected a tag build: ${env.TAG_NAME} (gán BRANCH=deploy)"
+            echo "→ Detected a tag build: ${env.TAG_NAME} (tự động gán BRANCH=deploy)"
           } else {
-            // Build nhánh hoặc PR
+            // Đang build một nhánh (thường là develop)
             env.TAG_NAME = ""
-            // Nếu là PR, BRANCH_NAME sẽ như "PR-xx"; vẫn set BRANCH=develop để chạy logic giống develop
-            env.BRANCH = (changeRequest() ? "develop" : env.BRANCH_NAME)
-            echo "→ Detected a branch/PR build: ${env.BRANCH_NAME} → gán BRANCH=${env.BRANCH}"
+            env.BRANCH = env.BRANCH_NAME
+            echo "→ Detected a branch build: ${env.BRANCH}"
           }
         }
       }
     }
 
-    // ==========================
+    // -------------------------------------
     // 3. SET IMAGE TAG
-    //    - Nếu BRANCH=='deploy' (tag build), gán prod-<TAG> hoặc prod-<BUILD_ID>
-    //    - Nếu BRANCH=='develop' (commit/PR), gán <branch>-<shortSHA>
-    // ==========================
+    //    - Nếu BRANCH=deploy (tag hoặc commit deploy), gắn prefix prod-
+    //    - Ngược lại (develop hoặc feature), gắn <branch>-<shortSHA>
+    // -------------------------------------
     stage('Set Image Tag') {
       when {
         anyOf {
           branch 'develop'
-          changeRequest()
-          tag pattern: "v.*", comparator: "REGEXP"
+          buildingTag()
         }
       }
       steps {
         script {
           def branch = env.BRANCH ?: "develop"
           if (branch == 'deploy') {
-            // Build production (từ tag)
+            // Tag build hoặc commit thẳng trên deploy (thường chỉ tag)
             env.IMAGE_TAG = "prod-${env.TAG_NAME ?: env.BUILD_ID}"
             env.RUN_SONAR  = "false"
           } else {
-            // Develop (commit hoặc PR)
+            // Branch develop hoặc các feature khác
             def commitHash = sh(returnStdout: true, script: 'git rev-parse --short HEAD').trim()
             env.IMAGE_TAG = "${branch}-${commitHash}"
             env.RUN_SONAR  = "true"
           }
+
           echo "Image tag = ${env.IMAGE_TAG}"
           echo "Run SonarQube? => ${env.RUN_SONAR}"
         }
       }
     }
 
-    // ==========================
+    // -------------------------------------
     // 4. DETECT CHANGED SERVICES
-    //    - Nếu BRANCH=='deploy' (tag), build tất cả
-    //    - Nếu BRANCH=='develop' (commit/PR), so sánh diff với origin/develop
-    // ==========================
+    //    - Nếu trình build là deploy (tag), build Toàn bộ
+    //    - Nếu là develop, so sánh với origin/develop
+    // -------------------------------------
     stage('Detect Changed Services') {
       when {
         anyOf {
           branch 'develop'
-          changeRequest()
-          tag pattern: "v.*", comparator: "REGEXP"
+          buildingTag()
         }
       }
       steps {
         script {
           def all = ALL_SERVICES.split(',')
           if (env.BRANCH == 'deploy') {
+            // Tag build → build tất cả
             env.CHANGED_SERVICES = all.join(',')
-            echo "→ BRANCH=deploy → build tất cả service"
+            echo "Branch 'deploy' → build all services"
           } else {
             // So sánh với origin/develop
-            sh "git fetch origin develop"
-            def diffRaw = sh(returnStdout: true, script: "git diff --name-only origin/develop").trim()
+            sh "git fetch origin ${env.BRANCH}"
+            def diffRaw = sh(returnStdout: true, script: "git diff --name-only origin/${env.BRANCH}").trim()
             if (diffRaw) {
               def changedDirs = diffRaw.split('\n').collect { it.split('/')[0] }.unique()
               def intersect = changedDirs.intersect(all as List)
               if (intersect.size() > 0) {
                 env.CHANGED_SERVICES = intersect.join(',')
-                echo "→ Các service có thay đổi: ${env.CHANGED_SERVICES}"
               } else {
-                echo "→ Không có thay đổi trong service folders → build all"
+                echo "No changes in service folders → build all"
                 env.CHANGED_SERVICES = all.join(',')
               }
             } else {
-              echo "→ Không có file nào thay đổi so với origin/develop → build all"
+              echo "No files changed compared to origin/${env.BRANCH} → build all"
               env.CHANGED_SERVICES = all.join(',')
             }
           }
-          echo "Danh sách service cần build: ${env.CHANGED_SERVICES}"
+          echo "Services to build: ${env.CHANGED_SERVICES}"
         }
       }
     }
 
-    // ==========================
+    // -------------------------------------
     // 5. SONARQUBE ANALYSIS
-    //    - Chỉ chạy khi RUN_SONAR=='true' (tức trên develop, commit/PR)
-    // ==========================
+    //    - Chỉ chạy khi RUN_SONAR=true (tức nhánh develop, không phải tag)
+    //    - Chỉ scan những service trong CHANGED_SERVICES
+    // -------------------------------------
     stage('SonarQube Analysis') {
       when {
         allOf {
@@ -182,31 +177,32 @@ pipeline {
       post {
         success {
           script {
+            // Bắt buộc Quality Gate pass, nếu fail → pipeline dừng
             timeout(time: 15, unit: 'MINUTES') {
               waitForQualityGate(abortPipeline: true)
             }
           }
         }
         failure {
-          echo "⚠️ SonarQube Analysis lỗi hoặc Quality Gate fail."
+          echo "⚠️ SonarQube Analysis gặp lỗi."
         }
       }
     }
 
-    // ==========================
+    // -------------------------------------
     // 6. BUILD & SCAN DOCKER IMAGES
-    //    - Chạy trên develop (commit/PR) và trên deploy (tag)
-    // ==========================
+    //    - Chạy trên develop (commit) và chạy trên deploy (tag) đều được
+    // -------------------------------------
     stage('Build & Scan Docker Images') {
       when {
         anyOf {
           branch 'develop'
-          changeRequest()
-          tag pattern: "v.*", comparator: "REGEXP"
+          buildingTag()
         }
       }
       steps {
         script {
+          // Login Docker Hub
           sh "echo ${REGISTRY_CRED_PSW} | docker login -u ${REGISTRY_CRED_USR} --password-stdin"
 
           sh """
@@ -234,7 +230,7 @@ pipeline {
                       --output /reports/${svc}-trivy-scan-report.html \
                       ${IMAGE_REGISTRY}/${svc}:${env.IMAGE_TAG} || true
                 """
-                echo "→ Trivy scan xong cho ${svc}"
+                echo "→ Trivy scan for ${svc} done"
               }
             }
           }
@@ -243,15 +239,14 @@ pipeline {
       }
     }
 
-    // ==========================
+    // -------------------------------------
     // 7. PUSH IMAGES
-    // ==========================
+    // -------------------------------------
     stage('Push Images') {
       when {
         anyOf {
           branch 'develop'
-          changeRequest()
-          tag pattern: "v.*", comparator: "REGEXP"
+          buildingTag()
         }
       }
       steps {
@@ -268,15 +263,14 @@ pipeline {
       }
     }
 
-    // ==========================
+    // -------------------------------------
     // 8. UPDATE GITOPS MANIFESTS
-    // ==========================
+    // -------------------------------------
     stage('Update GitOps Manifests') {
       when {
         anyOf {
           branch 'develop'
-          changeRequest()
-          tag pattern: "v.*", comparator: "REGEXP"
+          buildingTag()
         }
       }
       steps {
@@ -320,22 +314,23 @@ pipeline {
       }
     }
 
-    // ==========================
+    // -------------------------------------
     // 9. GENERATE CHANGELOG (chỉ khi tag từ deploy)
-    // ==========================
+    // -------------------------------------
     stage('Generate Changelog (for prod)') {
       when {
         expression {
+          // Chỉ chạy khi thực sự có tag, và giả định tag từ deploy
           return (env.TAG_NAME?.trim() && env.BRANCH == 'deploy')
         }
       }
       steps {
         script {
-          echo "→ Generating changelog cho tag: ${env.TAG_NAME}"
+          echo "→ Generating changelog for tag: ${env.TAG_NAME}"
 
           def prevTag = sh(returnStdout: true,
                           script: "git describe --tags --abbrev=0 \$(git rev-list --tags --skip=1 --max-count=1)").trim()
-          echo "Previous tag = ${prevTag}"
+          echo "Previous tag: ${prevTag}"
 
           def changelog = sh(returnStdout: true,
                             script: "git log ${prevTag}..${env.TAG_NAME} --pretty=format:'- %s'").trim()
@@ -344,7 +339,7 @@ pipeline {
 
           dir('gitops') {
             sh 'git add changelogs/'
-            sh "git commit -m 'Add changelog for ${env.TAG_NAME}' || echo 'No changelog changes to commit'"
+            sh "git commit -m 'Add changelog for ${env.TAG_NAME}' || echo 'No changes to commit'"
             sh "git push origin ${env.BRANCH}"
           }
         }
@@ -356,14 +351,14 @@ pipeline {
     success {
       script {
         if (env.BRANCH == 'deploy') {
-          slackSend(channel: '#release', message: "✅ Version ${env.IMAGE_TAG} đã deploy thành công lên production.")
+          slackSend(channel: '#release', message: "✅ Version ${env.IMAGE_TAG} has been successfully deployed to production.")
         }
       }
     }
     failure {
       script {
         if (env.BRANCH == 'deploy') {
-          slackSend(channel: '#release', message: "❌ Deploy version ${env.IMAGE_TAG} thất bại.")
+          slackSend(channel: '#release', message: "❌ Failed to deploy version ${env.IMAGE_TAG} to production.")
         }
       }
     }
