@@ -182,7 +182,8 @@ pipeline {
     stage('Update GitOps Manifests') {
       steps {
         script {
-          def targetBranch = (env.BRANCH == 'deploy') ? 'product' : env.BRANCH
+          def targetBranch = env.BRANCH
+
           withCredentials([usernamePassword(
               credentialsId: 'github-token',
               usernameVariable: 'GIT_USER',
@@ -204,14 +205,16 @@ pipeline {
 
               def pathPrefix = (env.BRANCH == 'deploy') ? 'prod' : 'dev'
               def services = env.CHANGED_SERVICES.split(',')
+              
               services.each { svc ->
                 def file = "${pathPrefix}/${svc}/${svc}-deployment.yaml"
                 sh """
                   sed -i 's#image: .*/${svc}:.*#image: ${IMAGE_REGISTRY}/${svc}:${env.IMAGE_TAG}#' ${file}
                 """
               }
+
               sh 'git config user.name "jenkins-ci"'
-              sh 'git config user.email "[email protected]"'
+              sh 'git config user.email "[email protected]"'
               sh 'git add .'
               sh "git commit -m 'Update image tags to ${env.IMAGE_TAG} [ci skip]' || echo 'No changes to commit'"
               sh "git push https://${GIT_USER}:${GIT_PASS}@github.com/v4224/dacn-gitops.git ${targetBranch}:${targetBranch}"
