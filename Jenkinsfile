@@ -2,7 +2,6 @@ pipeline {
   agent { label 'jenkins' }
 
   environment {
-    REGISTRY_CRED    = credentials('docker-hub')
     IMAGE_REGISTRY   = "hoangvu42"
     SONARQUBE_ENV    = "sonarqube-server"
     GITOPS_REPO_URL  = "https://github.com/v4224/dacn-gitops.git"
@@ -18,10 +17,9 @@ pipeline {
     stage('Checkout Source') {
       steps {
         checkout scm
-
         script {
           def currentBranch = env.BRANCH_NAME
-          env.BRANCH   = currentBranch
+          env.BRANCH = currentBranch
           echo "=== Checkout done! ==="
           echo "Current Branch => ${currentBranch}"
         }
@@ -31,14 +29,14 @@ pipeline {
     stage('Set Image Tag') {
       steps {
         script {
-          def branch = env.BRANCH   ?: "develop"
+          def branch = env.BRANCH ?: "develop"
 
           if (branch == 'deploy') {
             env.IMAGE_TAG = "prod-${env.BUILD_ID}"
           } else {
             def commitHash = sh(returnStdout: true, script: 'git rev-parse --short HEAD').trim()
             env.IMAGE_TAG = "${branch}-${commitHash}"
-            env.RUN_SONAR  = "true"
+            env.RUN_SONAR = "true"
           }
 
           echo "Image tag: ${env.IMAGE_TAG}"
@@ -63,17 +61,13 @@ pipeline {
               def changedDirs = diffRaw.split('\n').collect { it.split('/')[0] }.unique()
               def intersect = changedDirs.intersect(all as List)
 
-              if (intersect.size() > 0) {
-                env.CHANGED_SERVICES = intersect.join(',')
-              } else {
-                echo "No changes found in nay service folders. Build all."
-                env.CHANGED_SERVICES = all.join(',')
-              }
+              env.CHANGED_SERVICES = (intersect.size() > 0) ? intersect.join(',') : all.join(',')
             } else {
               echo "No files changed compared to origin/${env.BRANCH}. Build all."
               env.CHANGED_SERVICES = all.join(',')
             }
           }
+
           echo "List of services to build: ${env.CHANGED_SERVICES}"
         }
       }
@@ -124,41 +118,49 @@ pipeline {
 
     stage('Build & Scan Docker Images') {
       steps {
-        script {
-          sh "echo ${REGISTRY_CRED_PSW} | docker login -u ${REGISTRY_CRED_USR} --password-stdin"
+        withCredentials([usernamePassword(
+          credentialsId: 'docker-hub',
+          usernameVariable: 'DOCKER_USER',
+          passwordVariable: 'DOCKER_PASS'
+        )]) {
+          script {
+            sh '''
+              echo $DOCKER_PASS | docker login -u $DOCKER_USER --password-stdin
+            '''
 
-          sh """
-            mkdir -p ${env.WORKSPACE}/.trivy-cache
-            mkdir -p ${env.WORKSPACE}/trivy-reports
-          """
+            sh """
+              mkdir -p ${env.WORKSPACE}/.trivy-cache
+              mkdir -p ${env.WORKSPACE}/trivy-reports
+            """
 
-          def services = env.CHANGED_SERVICES.split(',')
-          def buildTasks = [:]
+            def services = env.CHANGED_SERVICES.split(',')
+            def buildTasks = [:]
 
-          services.each { svc ->
-            buildTasks[svc] = {
-              dir(svc) {
-                sh "docker build -t ${IMAGE_REGISTRY}/${svc}:${env.IMAGE_TAG} ."
+            services.each { svc ->
+              buildTasks[svc] = {
+                dir(svc) {
+                  sh "docker build -t ${IMAGE_REGISTRY}/${svc}:${env.IMAGE_TAG} ."
 
-                sh """
-                  docker run --rm \
-                    -v /var/run/docker.sock:/var/run/docker.sock \
-                    -v ${env.WORKSPACE}/.trivy-cache:/root/.cache/trivy \
-                    -v ${env.WORKSPACE}/trivy-reports:/reports \
-                    aquasec/trivy image \
-                    --cache-dir /root/.cache/trivy \
-                    --scanners vuln \
-                    --timeout 15m \
-                    --format template \
-                    --template @contrib/html.tpl \
-                    --output /reports/${svc}-trivy-scan-report.html \
-                    ${IMAGE_REGISTRY}/${svc}:${env.IMAGE_TAG} || true
-                """
-                echo "→ Trivy scan for ${svc} completed (report: trivy-reports/${svc}-trivy-scan-report.html)"
+                  sh """
+                    docker run --rm \
+                      -v /var/run/docker.sock:/var/run/docker.sock \
+                      -v ${env.WORKSPACE}/.trivy-cache:/root/.cache/trivy \
+                      -v ${env.WORKSPACE}/trivy-reports:/reports \
+                      aquasec/trivy image \
+                      --cache-dir /root/.cache/trivy \
+                      --scanners vuln \
+                      --timeout 15m \
+                      --format template \
+                      --template @contrib/html.tpl \
+                      --output /reports/${svc}-trivy-scan-report.html \
+                      ${IMAGE_REGISTRY}/${svc}:${env.IMAGE_TAG} || true
+                  """
+                  echo "→ Trivy scan for ${svc} completed (report: trivy-reports/${svc}-trivy-scan-report.html)"
+                }
               }
             }
+            parallel buildTasks
           }
-          parallel buildTasks
         }
       }
     }
@@ -181,26 +183,24 @@ pipeline {
 
     stage('Update GitOps Manifests') {
       steps {
-        script {
-          def targetBranch = env.BRANCH
-
-          withCredentials([usernamePassword(
-              credentialsId: 'github-token',
-              usernameVariable: 'GIT_USER',
-              passwordVariable: 'GIT_PASS'
-          )]) {
-            if (fileExists('gitops')) {
-              sh 'rm -rf gitops'
-            }
-            sh "git clone https://${GIT_USER}:${GIT_PASS}@github.com/v4224/dacn-gitops.git gitops"
+        withCredentials([usernamePassword(
+          credentialsId: 'github-token',
+          usernameVariable: 'GIT_USER',
+          passwordVariable: 'GIT_PASS'
+        )]) {
+          script {
+            sh '''
+              if [ -d "gitops" ]; then rm -rf gitops; fi
+              git clone https://$GIT_USER:$GIT_PASS@github.com/v4224/dacn-gitops.git gitops
+            '''
 
             dir('gitops') {
               def exists = sh(returnStdout: true,
-                              script: "git ls-remote --heads origin ${targetBranch} || true").trim()
+                              script: "git ls-remote --heads origin ${env.BRANCH} || true").trim()
               if (!exists) {
-                sh "git checkout -b ${targetBranch}"
+                sh "git checkout -b ${env.BRANCH}"
               } else {
-                sh "git checkout ${targetBranch}"
+                sh "git checkout ${env.BRANCH}"
               }
 
               def pathPrefix = (env.BRANCH == 'deploy') ? 'prod' : 'dev'
@@ -213,53 +213,15 @@ pipeline {
                 """
               }
 
-              sh 'git config user.name "jenkins-ci"'
-              sh 'git config user.email "[email protected]"'
-              sh 'git add .'
-              sh "git commit -m 'Update image tags to ${env.IMAGE_TAG} [ci skip]' || echo 'No changes to commit'"
-              sh "git push https://${GIT_USER}:${GIT_PASS}@github.com/v4224/dacn-gitops.git ${targetBranch}:${targetBranch}"
+              sh '''
+                git config user.name "jenkins-ci"
+                git config user.email "[email protected]"
+                git add .
+                git commit -m "Update image tags to ${IMAGE_TAG} [ci skip]" || echo "No changes to commit"
+                git push https://$GIT_USER:$GIT_PASS@github.com/v4224/dacn-gitops.git ${BRANCH}:${BRANCH}
+              '''
             }
           }
-        }
-      }
-    }
-
-    // stage('Generate Changelog (for prod)') {
-    //   when {
-    //     expression {
-    //       return (env.TAG_NAME && env.TAG_NAME.trim())
-    //     }
-    //   }
-    //   steps {
-    //     script {
-    //       def prevTag = sh(returnStdout: true,
-    //                       script: "git describe --tags --abbrev=0 \$(git rev-list --tags --skip=1 --max-count=1)").trim()
-    //       def changelog = sh(returnStdout: true,
-    //                          script: "git log ${prevTag}..${env.TAG_NAME} --pretty=format:'- %s'").trim()
-    //       writeFile file: "gitops/changelogs/release-${env.TAG_NAME}.md", text: changelog
-
-    //       dir('gitops') {
-    //         sh 'git add changelogs/'
-    //         sh "git commit -m 'Add changelog for ${env.TAG_NAME}'"
-    //         sh 'git push origin '
-    //       }
-    //     }
-    //   }
-    // }    
-  }
-
-  post {
-    success {
-      script {
-        if (env.BRANCH == 'deploy') {
-          slackSend(channel: '#release', message: "✅ Version ${env.IMAGE_TAG} has been successfully deployed to production.")
-        }
-      }
-    }
-    failure {
-      script {
-        if (env.BRANCH == 'deploy') {
-          slackSend(channel: '#release', message: "❌ Failed to deploy version ${env.IMAGE_TAG} to production.")
         }
       }
     }
