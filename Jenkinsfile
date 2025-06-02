@@ -205,9 +205,9 @@ pipeline {
 
               def pathPrefix = (env.BRANCH == 'deploy') ? 'prod' : 'dev'
               def services = env.CHANGED_SERVICES.split(',')
-              
+
               services.each { svc ->
-                def file = "${pathPrefix}/${svc}/${svc}-deployment.yaml"
+                def file = "app/${svc}/${svc}-deployment.yaml"
                 sh """
                   sed -i 's#image: .*/${svc}:.*#image: ${IMAGE_REGISTRY}/${svc}:${env.IMAGE_TAG}#' ${file}
                 """
