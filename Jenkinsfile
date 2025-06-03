@@ -32,7 +32,11 @@ pipeline {
           def branch = env.BRANCH ?: "develop"
 
           if (branch == 'deploy') {
-            env.IMAGE_TAG = "prod-${env.BUILD_ID}"
+            def timestamp = sh(
+            returnStdout: true,
+            script: "date '+%Y-%m-%d_%H-%M-%S'"
+            ).trim()
+            env.IMAGE_TAG = "prod-${timestamp}"
           } else {
             def commitHash = sh(returnStdout: true, script: 'git rev-parse --short HEAD').trim()
             env.IMAGE_TAG = "${branch}-${commitHash}"
