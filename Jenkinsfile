@@ -59,9 +59,8 @@ pipeline {
 
             if (diffRaw) {
               def changedDirs = diffRaw.split('\n').collect { it.split('/')[0] }.unique()
-              def intersect = changedDirs.intersect(all as List)
-
-              env.CHANGED_SERVICES = (intersect.size() > 0) ? intersect.join(',') : all.join(',')
+              def matchedServices = changedDirs.findAll { all.contains(it) }
+              env.CHANGED_SERVICES = matchedServices ? matchedServices.join(',') : all.join(',')
             } else {
               echo "No files changed compared to origin/${env.BRANCH}. Build all."
               env.CHANGED_SERVICES = all.join(',')
