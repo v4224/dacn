@@ -20,7 +20,7 @@ pipeline {
         script {
           def currentBranch = env.BRANCH_NAME
           env.BRANCH = currentBranch
-          echo "=== Checkout done! ==="
+          echo "=== Checkout done ==="
           echo "Current Branch => ${currentBranch}"
         }
       }
