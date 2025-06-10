@@ -119,7 +119,7 @@ pipeline {
     stage('Build & Scan Docker Images') {
       steps {
         withCredentials([usernamePassword(
-          credentialsId: 'docker-hub',
+          credentialsId: 'dockerhub-token',
           usernameVariable: 'DOCKER_USER',
           passwordVariable: 'DOCKER_PASS'
         )]) {
